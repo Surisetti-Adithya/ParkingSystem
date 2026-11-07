@@ -1,0 +1,399 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Parking Tower</title>
+    <style>
+      body {
+        margin: 0;
+        display: flex;
+        height: 100vh;
+        font-family: sans-serif;
+        background: #111;
+        color: #f7f5f5;
+      }
+      #view {
+        flex: 1;
+        min-width: 0;
+      }
+      #panel {
+        width: 310px;
+        padding: 14px;
+        background: #636362;
+        overflow: auto;
+        box-sizing: border-box;
+      }
+      input,
+      select,
+      button {
+        padding: 6px;
+        margin: 3px 0;
+        font-size: 14px;
+      }
+      input {
+        width: 120px;
+      }
+      .row {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        margin: 4px 0;
+        font-size: 13px;
+      }
+      .row input {
+        width: 50px;
+      }
+      #msg {
+        color: #f87171;
+        min-height: 18px;
+        font-size: 13px;
+      }
+      pre {
+        background: #000;
+        padding: 8px;
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+      .k {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        margin-right: 6px;
+      }
+      #legend div,
+      #types {
+        font-size: 13px;
+        margin: 2px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="view"></div>
+    <div id="panel">
+      <h3 style="font-size: xx-large;">Parking Tower</h3>
+      <hr style="border: none; border-top: 2px solid black;">
+      <div>
+        Floors (max 10)
+        <input
+          id="floors"
+          type="number"
+          min="1"
+          max="10"
+          value="3"
+          style="width: 60px"
+        />
+      </div>
+      <div>
+        Total capacity (max 120)
+        <input
+          id="capacity"
+          type="number"
+          min="1"
+          max="120"
+          value="12"
+          style="width: 60px"
+        />
+      </div>
+      <button id="setup">Create Tower</button>
+      <div style="margin-top: 8px" >
+        <hr style="border: none; border-top: 2px solid black;">
+        Parked now: <b id="count">0</b> / <b id="cap">0</b>
+      </div>
+      <div id="types"></div>
+      <h4>Cost per hour</h4>
+      <div id="legend"></div>
+      <h4>Park a vehicle</h4>
+      <select id="type">
+        <option>Car</option>
+        <option>Bike</option>
+        <option>ElectricCar</option>
+      </select>
+      <input id="plate" placeholder="Plate" />
+      <button id="park">Park</button>
+      <div id="msg"></div>
+      <h4>Parked vehicles</h4>
+      <div id="list"></div>
+      <pre id="receipt"></pre>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+      const API = location.protocol === "file:" ? "http://localhost:8080" : "";
+      const view = document.getElementById("view");
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x111111);
+      const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 300);
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      view.appendChild(renderer.domElement);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+      const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+      sun.position.set(10, 20, 10);
+      scene.add(sun);
+      const group = new THREE.Group();
+      scene.add(group);
+
+      const COLORS = { Car: 0x3b82f6, Bike: 0xf59e0b, ElectricCar: 0x22c55e };
+      const SIZE = {
+        Car: [2.2, 1, 1.4],
+        Bike: [1.4, 0.8, 0.6],
+        ElectricCar: [2.2, 1, 1.4],
+      };
+      const GAP = 4,
+        W = 3.2,
+        LIFT = 2.6; // LIFT = radius of the central lift
+      let lastKey = "",
+        rotY = 0.6,
+        rotX = 0.45,
+        dist = 30,
+        midY = 4;
+
+      function frame() {
+        camera.position.set(
+          dist * Math.sin(rotY) * Math.cos(rotX),
+          midY + dist * Math.sin(rotX),
+          dist * Math.cos(rotY) * Math.cos(rotX),
+        );
+        camera.lookAt(0, midY, 0);
+        renderer.render(scene, camera);
+        requestAnimationFrame(frame);
+      }
+      function resize() {
+        renderer.setSize(view.clientWidth, view.clientHeight);
+        camera.aspect = view.clientWidth / view.clientHeight;
+        camera.updateProjectionMatrix();
+      }
+      addEventListener("resize", resize);
+      resize();
+      frame();
+
+      let drag = false,
+        px = 0,
+        py = 0;
+      renderer.domElement.addEventListener("pointerdown", (e) => {
+        drag = true;
+        px = e.clientX;
+        py = e.clientY;
+      });
+      addEventListener("pointerup", () => (drag = false));
+      addEventListener("pointermove", (e) => {
+        if (!drag) return;
+        rotY -= (e.clientX - px) * 0.01;
+        rotX = Math.max(0.05, Math.min(1.4, rotX + (e.clientY - py) * 0.01));
+        px = e.clientX;
+        py = e.clientY;
+      });
+      renderer.domElement.addEventListener("wheel", (e) => {
+        dist = Math.max(10, Math.min(150, dist + e.deltaY * 0.03));
+      });
+
+      function label(t) {
+        const c = document.createElement("canvas");
+        c.width = 256;
+        c.height = 64;
+        const g = c.getContext("2d");
+        g.fillStyle = "#fff";
+        g.font = "bold 36px sans-serif";
+        g.textAlign = "center";
+        g.fillText(t, 128, 44);
+        const sp = new THREE.Sprite(
+          new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c) }),
+        );
+        sp.scale.set(4, 1, 1);
+        return sp;
+      }
+      function put(geo, color, x, y, z, opacity, ry) {
+        const m = new THREE.Mesh(
+          geo,
+          new THREE.MeshLambertMaterial({
+            color,
+            transparent: opacity < 1,
+            opacity,
+          }),
+        );
+        m.position.set(x, y, z);
+        m.rotation.y = ry || 0;
+        group.add(m);
+      }
+
+      function build(st) {
+        [...group.children].forEach((o) => {
+          group.remove(o);
+          if (o.geometry) o.geometry.dispose();
+          if (o.material) {
+            if (o.material.map) o.material.map.dispose();
+            o.material.dispose();
+          }
+        });
+        if (st.floors === 0) return;
+        const n0 = st.perFloor;
+        const R = Math.max(LIFT + 5, (n0 * W) / (2 * Math.PI) + 1.5); // ring radius, outside the lift
+        midY = ((st.floors - 1) * GAP) / 2;
+        const key = st.floors + "/" + n0;
+        if (key !== lastKey) {
+          lastKey = key;
+          dist = Math.max(30, (R + 2.5) * 2.4, st.floors * GAP * 1.8);
+        }
+
+        for (let f = 0; f < st.floors; f++) {
+          const y = f * GAP,
+            n = st.slots[f].length;
+          put(
+            new THREE.CylinderGeometry(R + 2.5, R + 2.5, 0.3, 48),
+            0x444444,
+            0,
+            y,
+            0,
+            1,
+          );
+          const fl = label("Floor " + (f + 1));
+          fl.position.set(-(R + 5), y + 1, 0);
+          group.add(fl);
+
+          for (let s = 0; s < n; s++) {
+            const a = (s / n) * 2 * Math.PI;
+            const x = R * Math.cos(a),
+              z = R * Math.sin(a);
+            const v = st.slots[f][s];
+            put(
+              new THREE.BoxGeometry(4, 0.05, W - 0.4),
+              v ? 0x7f1d1d : 0x14532d,
+              x,
+              y + 0.18,
+              z,
+              0.6,
+              -a,
+            );
+            if (v) {
+              const [w, h, d] = SIZE[v.type];
+              put(
+                new THREE.BoxGeometry(w, h, d),
+                COLORS[v.type],
+                x,
+                y + 0.2 + h / 2,
+                z,
+                1,
+                -a,
+              );
+              const l = label(v.plate);
+              l.position.set(x, y + h + 1, z);
+              group.add(l);
+            }
+          }
+        }
+        // central lift: the entrance, drawn larger than a parking slot
+        put(
+          new THREE.CylinderGeometry(
+            LIFT,
+            LIFT,
+            (st.floors - 1) * GAP + 0.3,
+            32,
+          ),
+          0x888888,
+          0,
+          midY,
+          0,
+          1,
+        );
+        const e = label("Lift (entrance)");
+        e.position.set(0, (st.floors - 1) * GAP + 2, 0);
+        group.add(e);
+      }
+
+      async function api(path) {
+        const r = await fetch(API + path, { method: "POST" });
+        const t = await r.text();
+        if (!r.ok) throw new Error(t);
+        return t;
+      }
+      async function refresh() {
+        let st;
+        try {
+          st = await (await fetch(API + "/state")).json();
+        } catch (e) {
+          document.getElementById("msg").textContent =
+            "Cannot reach Java server. Run: java ParkingTower.java";
+          return;
+        }
+        if (st.floors === 0)
+          document.getElementById("msg").textContent = "Create the tower first";
+        build(st);
+        document.getElementById("count").textContent = st.parked;
+        document.getElementById("cap").textContent = st.capacity;
+
+        const cnt = { Car: 0, Bike: 0, ElectricCar: 0 };
+        st.slots.forEach((row) =>
+          row.forEach((v) => {
+            if (v) cnt[v.type]++;
+          }),
+        );
+        document.getElementById("types").textContent =
+          `Cars: ${cnt.Car} | Bikes: ${cnt.Bike} | Electric cars: ${cnt.ElectricCar}`;
+
+        const legend = document.getElementById("legend");
+        legend.innerHTML = "";
+        Object.keys(COLORS).forEach((t) => {
+          const d = document.createElement("div");
+          d.innerHTML = `<span class="k" style="background:#${COLORS[t].toString(16).padStart(6, "0")}"></span>${t}: ${st.rates[t]} / hr`;
+          legend.appendChild(d);
+        });
+
+        const list = document.getElementById("list");
+        list.innerHTML = "";
+        st.slots.forEach((row, f) =>
+          row.forEach((v, s) => {
+            if (!v) return;
+            const d = document.createElement("div");
+            d.className = "row";
+            d.innerHTML = `<span>${v.plate} (${v.type}) F${f + 1} S${s}</span>`;
+            const m = document.createElement("input");
+            m.type = "number";
+            m.value = 60;
+            m.title = "minutes parked";
+            const b = document.createElement("button");
+            b.textContent = "Exit";
+            b.onclick = () =>
+              run(async () => {
+                document.getElementById("receipt").textContent = await api(
+                  "/exit?floor=" + f + "&slot=" + s + "&minutes=" + m.value,
+                );
+              });
+            d.append(m, b);
+            list.appendChild(d);
+          }),
+        );
+      }
+      async function run(fn) {
+        const msg = document.getElementById("msg");
+        msg.textContent = "";
+        try {
+          await fn();
+        } catch (e) {
+          msg.textContent = e.message;
+        }
+        refresh();
+      }
+      document.getElementById("park").onclick = () =>
+        run(async () => {
+          const plate = document.getElementById("plate").value.trim();
+          if (!plate) throw new Error("Enter a plate");
+          await api(
+            "/park?type=" +
+              document.getElementById("type").value +
+              "&plate=" +
+              encodeURIComponent(plate),
+          );
+          document.getElementById("plate").value = "";
+        });
+      document.getElementById("setup").onclick = () =>
+        run(async () => {
+          await api(
+            "/setup?floors=" +
+              document.getElementById("floors").value +
+              "&capacity=" +
+              document.getElementById("capacity").value,
+          );
+          document.getElementById("receipt").textContent = "";
+        });
+      refresh();
+    </script>
+  </body>
+</html>
